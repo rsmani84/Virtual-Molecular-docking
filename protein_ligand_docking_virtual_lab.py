@@ -9,7 +9,7 @@ import io
 import base64
 from datetime import datetime
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Lipinski, Crippen, Draw
+from rdkit.Chem import Descriptors, Lipinski, Crippen, AllChem
 from rdkit.Chem import AllChem
 from Bio.PDB import PDBParser
 import py3Dmol
@@ -136,10 +136,6 @@ def ligand_properties(mol):
         "TPSA": round(Descriptors.TPSA(mol), 2)
     }
 
-
-def mol_to_image(mol):
-    img = Draw.MolToImage(mol, size=(350, 250))
-    return img
 
 
 def show_3dmol(pdb_text=None, mol_block=None, height=450):
@@ -371,7 +367,7 @@ elif menu == "Ligand Preparation":
         props = ligand_properties(mol)
         st.subheader("Ligand Properties")
         st.dataframe(pd.DataFrame(props.items(), columns=["Property", "Value"]), use_container_width=True)
-        st.image(mol_to_image(mol), caption="2D Ligand Structure")
+        st.info("Ligand prepared successfully. 2D structure preview is disabled in this deployed version.")
         st.session_state["ligand_info"] = props
 
 # -----------------------------
