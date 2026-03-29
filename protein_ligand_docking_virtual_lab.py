@@ -1,14 +1,19 @@
+import os
+import warnings
+from datetime import datetime
+
 import gradio as gr
 import pandas as pd
 import requests
-import os
-from datetime import datetime
+from rdkit import Chem
 from rdkit.Chem import Descriptors, Lipinski, Crippen, AllChem
 from Bio.PDB import PDBParser
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
+
+warnings.filterwarnings("ignore")
 
 # -----------------------------
 # FOLDERS
@@ -19,7 +24,9 @@ os.makedirs("feedback", exist_ok=True)
 
 FEEDBACK_FILE = "feedback/feedback.csv"
 if not os.path.exists(FEEDBACK_FILE):
-    pd.DataFrame(columns=["timestamp", "name", "reg_no", "rating", "feedback"]).to_csv(FEEDBACK_FILE, index=False)
+    pd.DataFrame(columns=["timestamp", "name", "reg_no", "rating", "feedback"]).to_csv(
+        FEEDBACK_FILE, index=False
+    )
 
 # -----------------------------
 # GLOBAL STATE
@@ -34,7 +41,7 @@ app_state = {
     "ligand_name": "",
     "ligand_info": None,
     "dock_box": {},
-    "docking_result": None
+    "docking_result": None,
 }
 
 # -----------------------------
@@ -42,15 +49,17 @@ app_state = {
 # -----------------------------
 def fetch_pdb(pdb_id):
     try:
-        url = f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb"
+        pdb_id = pdb_id.strip().upper()
+        url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
         response = requests.get(url, timeout=15)
-        if response.status_code == 200 and "HEADER" in response.text[:500]:
-            path = f"data/proteins/{pdb_id.upper()}.pdb"
+
+        if response.status_code == 200 and ("ATOM" in response.text or "HEADER" in response.text):
+            path = f"data/proteins/{pdb_id}.pdb"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(response.text)
             return path, response.text
         return None, None
-    except:
+    except Exception:
         return None, None
 
 
@@ -62,6 +71,7 @@ def parse_pdb_info(pdb_path):
         residues = list(structure.get_residues())
         waters = sum(1 for r in residues if r.get_resname() == "HOH")
         hetero = sum(1 for r in residues if r.id[0] != " ")
+
         return {
             "Chains": len(chains),
             "Residues": len(residues),
@@ -74,14 +84,18 @@ def parse_pdb_info(pdb_path):
 
 def smiles_to_mol(smiles):
     try:
-        mol = Chem.MolFromSmiles(smiles)
+        if not smiles or not smiles.strip():
+            return None
+
+        mol = Chem.MolFromSmiles(smiles.strip())
         if mol is None:
             return None
+
         mol = Chem.AddHs(mol)
         AllChem.EmbedMolecule(mol, randomSeed=42)
         AllChem.UFFOptimizeMolecule(mol)
         return mol
-    except:
+    except Exception:
         return None
 
 
@@ -92,7 +106,7 @@ def ligand_properties(mol):
         "H-Bond Acceptors": Lipinski.NumHAcceptors(mol),
         "LogP": round(Crippen.MolLogP(mol), 2),
         "Rotatable Bonds": Lipinski.NumRotatableBonds(mol),
-        "TPSA": round(Descriptors.TPSA(mol), 2)
+        "TPSA": round(Descriptors.TPSA(mol), 2),
     }
 
 
@@ -100,6 +114,7 @@ def simulate_docking(ligand_name, protein_name):
     base_score = -6.2
     if ligand_name:
         base_score -= min(len(ligand_name) * 0.05, 1.0)
+
     residues = ["ASN142", "GLU166", "HIS41", "SER144", "CYS145"]
     interactions = [
         ["Hydrogen Bond", residues[0], "2.9 Å"],
@@ -108,6 +123,7 @@ def simulate_docking(ligand_name, protein_name):
         ["Van der Waals", residues[3], "3.8 Å"],
         ["Hydrophobic", residues[4], "4.2 Å"],
     ]
+
     return {
         "Protein": protein_name if protein_name else "Uploaded Protein",
         "Ligand": ligand_name if ligand_name else "Uploaded Ligand",
@@ -115,7 +131,10 @@ def simulate_docking(ligand_name, protein_name):
         "Pose Rank": 1,
         "RMSD (Å)": 1.78,
         "Interactions": interactions,
-        "Interpretation": "A more negative docking score indicates stronger predicted binding affinity. This result suggests moderate to good ligand–protein interaction in the selected binding pocket."
+        "Interpretation": (
+            "A more negative docking score indicates stronger predicted binding affinity. "
+            "This result suggests moderate to good ligand–protein interaction in the selected binding pocket."
+        ),
     }
 
 
@@ -125,49 +144,49 @@ def generate_pdf_report(student_name, reg_no, result, protein_info=None, ligand_
     styles = getSampleStyleSheet()
     story = []
 
-    story.append(Paragraph("Protein–Ligand Docking Virtual Lab Report", styles['Title']))
+    story.append(Paragraph("Protein–Ligand Docking Virtual Lab Report", styles["Title"]))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Date: {datetime.now().strftime('%d-%m-%Y %H:%M')}", styles['Normal']))
-    story.append(Paragraph(f"Name: {student_name if student_name else 'Optional / Not Provided'}", styles['Normal']))
-    story.append(Paragraph(f"Registration Number: {reg_no if reg_no else 'Optional / Not Provided'}", styles['Normal']))
+    story.append(Paragraph(f"Date: {datetime.now().strftime('%d-%m-%Y %H:%M')}", styles["Normal"]))
+    story.append(Paragraph(f"Name: {student_name if student_name else 'Optional / Not Provided'}", styles["Normal"]))
+    story.append(Paragraph(f"Registration Number: {reg_no if reg_no else 'Optional / Not Provided'}", styles["Normal"]))
     story.append(Spacer(1, 12))
 
-    story.append(Paragraph("Docking Summary", styles['Heading2']))
+    story.append(Paragraph("Docking Summary", styles["Heading2"]))
     summary_data = [[k, str(v)] for k, v in result.items() if k not in ["Interactions", "Interpretation"]]
     summary_table = Table(summary_data, colWidths=[220, 250])
     summary_table.setStyle(TableStyle([
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story.append(summary_table)
     story.append(Spacer(1, 12))
 
     if protein_info:
-        story.append(Paragraph("Protein Information", styles['Heading2']))
+        story.append(Paragraph("Protein Information", styles["Heading2"]))
         protein_table = Table([[k, str(v)] for k, v in protein_info.items()], colWidths=[220, 250])
-        protein_table.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 0.5, colors.grey)]))
+        protein_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey)]))
         story.append(protein_table)
         story.append(Spacer(1, 12))
 
     if ligand_info:
-        story.append(Paragraph("Ligand Properties", styles['Heading2']))
+        story.append(Paragraph("Ligand Properties", styles["Heading2"]))
         ligand_table = Table([[k, str(v)] for k, v in ligand_info.items()], colWidths=[220, 250])
-        ligand_table.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 0.5, colors.grey)]))
+        ligand_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey)]))
         story.append(ligand_table)
         story.append(Spacer(1, 12))
 
-    story.append(Paragraph("Protein–Ligand Interactions", styles['Heading2']))
+    story.append(Paragraph("Protein–Ligand Interactions", styles["Heading2"]))
     interaction_data = [["Interaction Type", "Residue", "Distance"]] + result["Interactions"]
     interaction_table = Table(interaction_data, colWidths=[160, 160, 150])
     interaction_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightblue),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
     ]))
     story.append(interaction_table)
     story.append(Spacer(1, 12))
 
-    story.append(Paragraph("Interpretation", styles['Heading2']))
-    story.append(Paragraph(result["Interpretation"], styles['BodyText']))
+    story.append(Paragraph("Interpretation", styles["Heading2"]))
+    story.append(Paragraph(result["Interpretation"], styles["BodyText"]))
 
     doc.build(story)
     return file_path
@@ -179,7 +198,7 @@ def save_feedback(name, reg_no, rating, feedback_text):
         "name": name,
         "reg_no": reg_no,
         "rating": rating,
-        "feedback": feedback_text
+        "feedback": feedback_text,
     }])
     row.to_csv(FEEDBACK_FILE, mode="a", header=False, index=False)
 
@@ -188,18 +207,18 @@ def save_feedback(name, reg_no, rating, feedback_text):
 # PROTEIN FUNCTIONS
 # -----------------------------
 def protein_fetch_fn(pdb_id):
-    if not pdb_id.strip():
+    if not pdb_id or not pdb_id.strip():
         return "Please enter a valid PDB ID.", pd.DataFrame(), "<p>No structure loaded.</p>"
 
-    path, text = fetch_pdb(pdb_id.strip())
+    path, text = fetch_pdb(pdb_id)
     if path:
         app_state["protein_pdb"] = path
-        app_state["protein_name"] = pdb_id.upper()
+        app_state["protein_name"] = pdb_id.strip().upper()
         app_state["pdb_text"] = text
         info = parse_pdb_info(path)
         app_state["protein_info"] = info
         df = pd.DataFrame(info.items(), columns=["Property", "Value"])
-        return f"Protein {pdb_id.upper()} fetched successfully.", df, f"<pre>{text[:3000]}</pre>"
+        return f"Protein {pdb_id.strip().upper()} fetched successfully.", df, f"<pre>{text[:3000]}</pre>"
     else:
         return "Unable to fetch PDB file. Please check the PDB ID.", pd.DataFrame(), "<p>No structure loaded.</p>"
 
@@ -208,23 +227,28 @@ def protein_upload_fn(file):
     if file is None:
         return "Please upload a PDB file.", pd.DataFrame(), "<p>No structure loaded.</p>"
 
-    save_path = f"data/proteins/{os.path.basename(file.name)}"
-    with open(file.name, "rb") as src:
-        with open(save_path, "wb") as dst:
-            dst.write(src.read())
+    try:
+        uploaded_path = file.name if hasattr(file, "name") else str(file)
+        save_path = f"data/proteins/{os.path.basename(uploaded_path)}"
 
-    app_state["protein_pdb"] = save_path
-    app_state["protein_name"] = os.path.basename(file.name)
+        with open(uploaded_path, "rb") as src:
+            with open(save_path, "wb") as dst:
+                dst.write(src.read())
 
-    with open(save_path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
+        app_state["protein_pdb"] = save_path
+        app_state["protein_name"] = os.path.basename(uploaded_path)
 
-    app_state["pdb_text"] = text
-    info = parse_pdb_info(save_path)
-    app_state["protein_info"] = info
-    df = pd.DataFrame(info.items(), columns=["Property", "Value"])
+        with open(save_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
 
-    return "Protein uploaded successfully.", df, f"<pre>{text[:3000]}</pre>"
+        app_state["pdb_text"] = text
+        info = parse_pdb_info(save_path)
+        app_state["protein_info"] = info
+        df = pd.DataFrame(info.items(), columns=["Property", "Value"])
+
+        return "Protein uploaded successfully.", df, f"<pre>{text[:3000]}</pre>"
+    except Exception as e:
+        return f"Error uploading protein: {str(e)}", pd.DataFrame(), "<p>No structure loaded.</p>"
 
 
 # -----------------------------
@@ -237,7 +261,7 @@ def ligand_prepare_fn(smiles, ligand_name):
 
     app_state["ligand_mol"] = mol
     app_state["ligand_smiles"] = smiles
-    app_state["ligand_name"] = ligand_name if ligand_name else "Ligand"
+    app_state["ligand_name"] = ligand_name.strip() if ligand_name and ligand_name.strip() else "Ligand"
 
     props = ligand_properties(mol)
     app_state["ligand_info"] = props
@@ -256,7 +280,7 @@ def save_docking_box(center_x, center_y, center_z, size_x, size_y, size_z, exhau
         "size_x": size_x,
         "size_y": size_y,
         "size_z": size_z,
-        "exhaustiveness": exhaustiveness
+        "exhaustiveness": exhaustiveness,
     }
     return "Docking box parameters saved.", str(app_state["dock_box"])
 
@@ -278,7 +302,7 @@ def run_docking_fn():
         ["Ligand", result["Ligand"]],
         ["Binding Affinity (kcal/mol)", result["Binding Affinity (kcal/mol)"]],
         ["Pose Rank", result["Pose Rank"]],
-        ["RMSD (Å)", result["RMSD (Å)"]]
+        ["RMSD (Å)", result["RMSD (Å)"]],
     ], columns=["Parameter", "Value"])
 
     inter_df = pd.DataFrame(result["Interactions"], columns=["Interaction Type", "Residue", "Distance"])
@@ -294,14 +318,13 @@ def generate_report_fn(student_name, reg_no):
     if result is None:
         return None
 
-    pdf_path = generate_pdf_report(
+    return generate_pdf_report(
         student_name,
         reg_no,
         result,
         app_state.get("protein_info", None),
-        app_state.get("ligand_info", None)
+        app_state.get("ligand_info", None),
     )
-    return pdf_path
 
 
 # -----------------------------
@@ -312,7 +335,7 @@ def evaluate_quiz(a1, a2, a3, a4):
         "Stronger predicted binding",
         "To avoid unwanted interference in docking",
         "Hydrogen bond",
-        "Binding region for ligand"
+        "Binding region for ligand",
     ]
     user_answers = [a1, a2, a3, a4]
     score = sum(1 for u, c in zip(user_answers, answers) if u == c)
@@ -479,4 +502,4 @@ with gr.Blocks(title="Protein–Ligand Docking Virtual Lab") as demo:
     gr.Markdown("---")
     gr.Markdown("Developed using **Gradio** for educational demonstration of protein–ligand docking workflow.")
 
-demo.launch()
+demo.launch(server_name="0.0.0.0", server_port=7860)
