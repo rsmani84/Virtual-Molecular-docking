@@ -1,7 +1,6 @@
-streamlit
-pandas
-requests
-rdkit-pypi
-biopython
-py3Dmol
-reportlab
+gradio==4.44.1
+pandas==2.2.2
+requests==2.31.0
+rdkit-pypi==2022.9.5
+biopython==1.83
+reportlab==4.1.0
