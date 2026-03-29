@@ -1,7 +1,6 @@
-streamlit
+gradio
 pandas
 requests
-rdkit
+rdkit-pypi
 biopython
-py3Dmol
 reportlab
