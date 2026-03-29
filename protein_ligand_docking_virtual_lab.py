@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import os
 from datetime import datetime
-from rdkit import Chem
 from rdkit.Chem import Descriptors, Lipinski, Crippen, AllChem
 from Bio.PDB import PDBParser
 from reportlab.lib.pagesizes import A4
