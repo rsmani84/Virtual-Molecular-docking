@@ -1,32 +1,15 @@
-# Protein–Ligand Docking Virtual Lab (Streamlit)
-# Save this as app.py
-
-import streamlit as st
+import gradio as gr
 import pandas as pd
 import requests
 import os
-import io
-import base64
 from datetime import datetime
 from rdkit import Chem
 from rdkit.Chem import Descriptors, Lipinski, Crippen, AllChem
-from rdkit.Chem import AllChem
 from Bio.PDB import PDBParser
-import py3Dmol
-from streamlit.components.v1 import html
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
-st.set_page_config(
-    page_title="Protein–Ligand Docking Virtual Lab",
-    page_icon="🧬",
-    layout="wide"
-)
 
 # -----------------------------
 # FOLDERS
@@ -40,90 +23,67 @@ if not os.path.exists(FEEDBACK_FILE):
     pd.DataFrame(columns=["timestamp", "name", "reg_no", "rating", "feedback"]).to_csv(FEEDBACK_FILE, index=False)
 
 # -----------------------------
-# SESSION STATE
+# GLOBAL STATE
 # -----------------------------
-def init_session():
-    defaults = {
-        "protein_pdb": None,
-        "protein_name": "",
-        "ligand_mol": None,
-        "ligand_smiles": "",
-        "ligand_name": "",
-        "docking_result": None,
-        "student_name": "",
-        "reg_no": ""
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-init_session()
-
-# -----------------------------
-# STYLING
-# -----------------------------
-st.markdown("""
-<style>
-.main-title {
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: #0f172a;
+app_state = {
+    "protein_pdb": None,
+    "protein_name": "",
+    "pdb_text": "",
+    "protein_info": None,
+    "ligand_mol": None,
+    "ligand_smiles": "",
+    "ligand_name": "",
+    "ligand_info": None,
+    "dock_box": {},
+    "docking_result": None
 }
-.sub-title {
-    font-size: 1.1rem;
-    color: #475569;
-}
-.card {
-    background-color: #f8fafc;
-    padding: 1rem;
-    border-radius: 14px;
-    border: 1px solid #e2e8f0;
-    margin-bottom: 1rem;
-}
-.small-note {
-    font-size: 0.9rem;
-    color: #64748b;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # -----------------------------
 # HELPERS
 # -----------------------------
 def fetch_pdb(pdb_id):
-    url = f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb"
-    response = requests.get(url, timeout=15)
-    if response.status_code == 200 and "HEADER" in response.text[:200]:
-        path = f"data/proteins/{pdb_id.upper()}.pdb"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(response.text)
-        return path, response.text
-    return None, None
+    try:
+        url = f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb"
+        response = requests.get(url, timeout=15)
+        if response.status_code == 200 and "HEADER" in response.text[:500]:
+            path = f"data/proteins/{pdb_id.upper()}.pdb"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(response.text)
+            return path, response.text
+        return None, None
+    except:
+        return None, None
 
 
 def parse_pdb_info(pdb_path):
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_path)
-    chains = list(structure.get_chains())
-    residues = list(structure.get_residues())
-    waters = sum(1 for r in residues if r.get_resname() == "HOH")
-    hetero = sum(1 for r in residues if r.id[0] != " ")
-    return {
-        "Chains": len(chains),
-        "Residues": len(residues),
-        "Water molecules": waters,
-        "Hetero residues": hetero,
-    }
+    try:
+        parser = PDBParser(QUIET=True)
+        structure = parser.get_structure("protein", pdb_path)
+        chains = list(structure.get_chains())
+        residues = list(structure.get_residues())
+        waters = sum(1 for r in residues if r.get_resname() == "HOH")
+        hetero = sum(1 for r in residues if r.id[0] != " ")
+        return {
+            "Chains": len(chains),
+            "Residues": len(residues),
+            "Water molecules": waters,
+            "Hetero residues": hetero,
+        }
+    except Exception as e:
+        return {"Error": str(e)}
 
 
 def smiles_to_mol(smiles):
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.UFFOptimizeMolecule(mol)
+        return mol
+    except:
         return None
-    mol = Chem.AddHs(mol)
-    AllChem.EmbedMolecule(mol, randomSeed=42)
-    AllChem.UFFOptimizeMolecule(mol)
-    return mol
 
 
 def ligand_properties(mol):
@@ -137,21 +97,7 @@ def ligand_properties(mol):
     }
 
 
-
-def show_3dmol(pdb_text=None, mol_block=None, height=450):
-    view = py3Dmol.view(width=800, height=height)
-    if pdb_text:
-        view.addModel(pdb_text, 'pdb')
-        view.setStyle({'cartoon': {'color': 'spectrum'}})
-    if mol_block:
-        view.addModel(mol_block, 'mol')
-        view.setStyle({'model': 1}, {'stick': {'colorscheme': 'greenCarbon'}})
-    view.zoomTo()
-    return view._make_html()
-
-
 def simulate_docking(ligand_name, protein_name):
-    # Educational simulation only
     base_score = -6.2
     if ligand_name:
         base_score -= min(len(ligand_name) * 0.05, 1.0)
@@ -188,10 +134,9 @@ def generate_pdf_report(student_name, reg_no, result, protein_info=None, ligand_
     story.append(Spacer(1, 12))
 
     story.append(Paragraph("Docking Summary", styles['Heading2']))
-    summary_data = [[k, str(v)] for k, v in result.items() if k != "Interactions" and k != "Interpretation"]
+    summary_data = [[k, str(v)] for k, v in result.items() if k not in ["Interactions", "Interpretation"]]
     summary_table = Table(summary_data, colWidths=[220, 250])
     summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')
     ]))
@@ -239,158 +184,73 @@ def save_feedback(name, reg_no, rating, feedback_text):
     }])
     row.to_csv(FEEDBACK_FILE, mode="a", header=False, index=False)
 
-# -----------------------------
-# SIDEBAR
-# -----------------------------
-menu = st.sidebar.radio(
-    "Navigation",
-    ["Home", "Theory", "Protein Preparation", "Ligand Preparation", "Docking Setup", "Run Docking", "Results", "Quiz / Viva", "Feedback"]
-)
-
-st.sidebar.markdown("---")
-st.sidebar.text_input("Student Name (Optional)", key="student_name")
-st.sidebar.text_input("Registration Number (Optional)", key="reg_no")
 
 # -----------------------------
-# HOME
+# PROTEIN FUNCTIONS
 # -----------------------------
-if menu == "Home":
-    st.markdown('<div class="main-title">🧬 Protein–Ligand Docking Virtual Lab</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">An interactive educational platform to understand protein–ligand binding and molecular docking.</div>', unsafe_allow_html=True)
-    st.markdown("---")
+def protein_fetch_fn(pdb_id):
+    if not pdb_id.strip():
+        return "Please enter a valid PDB ID.", pd.DataFrame(), "<p>No structure loaded.</p>"
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.markdown("""
-        ### Objective
-        This virtual lab helps students learn the **workflow of molecular docking**:
-        - Protein selection and preparation
-        - Ligand input and molecular property analysis
-        - Docking box setup
-        - Docking score interpretation
-        - Protein–ligand interaction analysis
-        - Report generation and self-evaluation
-        """)
-
-        st.info("This app is designed for **teaching and learning purposes**. The docking step uses an educational simulation by default so it can run on Streamlit Cloud without heavy dependencies.")
-
-    with col2:
-        st.success("Recommended workflow:\n1. Protein Preparation\n2. Ligand Preparation\n3. Docking Setup\n4. Run Docking\n5. Results")
-
-# -----------------------------
-# THEORY
-# -----------------------------
-elif menu == "Theory":
-    st.header("📘 Theory of Molecular Docking")
-    st.markdown("""
-    **Molecular docking** is a computational technique used to predict how a **ligand** binds to a **protein receptor**.
-
-    ### Important Concepts
-    - **Protein**: Biological target such as enzyme or receptor
-    - **Ligand**: Small molecule/drug/phytochemical that binds to the protein
-    - **Active Site**: Binding pocket where ligand interacts with the protein
-    - **Docking Score**: Predicted binding energy (more negative = better affinity)
-    - **Hydrogen Bond / Hydrophobic Interaction**: Important interactions stabilizing the complex
-    - **RMSD**: Measure of structural similarity between poses
-
-    ### Applications
-    - Drug discovery
-    - Drug repurposing
-    - Enzyme inhibition studies
-    - Natural product screening
-    - Protein–ligand interaction analysis
-    """)
-
-# -----------------------------
-# PROTEIN PREPARATION
-# -----------------------------
-elif menu == "Protein Preparation":
-    st.header("🧫 Protein Preparation")
-    method = st.radio("Choose Protein Input Method", ["Fetch by PDB ID", "Upload PDB File"])
-
-    protein_info = None
-    pdb_text = None
-
-    if method == "Fetch by PDB ID":
-        pdb_id = st.text_input("Enter PDB ID", placeholder="Example: 6LU7")
-        if st.button("Fetch Protein"):
-            if pdb_id.strip():
-                path, text = fetch_pdb(pdb_id.strip())
-                if path:
-                    st.session_state.protein_pdb = path
-                    st.session_state.protein_name = pdb_id.upper()
-                    st.success(f"Protein {pdb_id.upper()} fetched successfully.")
-                else:
-                    st.error("Unable to fetch PDB file. Please check the PDB ID.")
-
+    path, text = fetch_pdb(pdb_id.strip())
+    if path:
+        app_state["protein_pdb"] = path
+        app_state["protein_name"] = pdb_id.upper()
+        app_state["pdb_text"] = text
+        info = parse_pdb_info(path)
+        app_state["protein_info"] = info
+        df = pd.DataFrame(info.items(), columns=["Property", "Value"])
+        return f"Protein {pdb_id.upper()} fetched successfully.", df, f"<pre>{text[:3000]}</pre>"
     else:
-        uploaded = st.file_uploader("Upload Protein PDB File", type=["pdb"])
-        if uploaded is not None:
-            save_path = f"data/proteins/{uploaded.name}"
-            with open(save_path, "wb") as f:
-                f.write(uploaded.read())
-            st.session_state.protein_pdb = save_path
-            st.session_state.protein_name = uploaded.name
-            st.success("Protein uploaded successfully.")
+        return "Unable to fetch PDB file. Please check the PDB ID.", pd.DataFrame(), "<p>No structure loaded.</p>"
 
-    if st.session_state.protein_pdb:
-        with open(st.session_state.protein_pdb, "r", encoding="utf-8", errors="ignore") as f:
-            pdb_text = f.read()
-        protein_info = parse_pdb_info(st.session_state.protein_pdb)
-        st.subheader("Protein Summary")
-        st.dataframe(pd.DataFrame(protein_info.items(), columns=["Property", "Value"]), use_container_width=True)
-        st.subheader("3D Protein View")
-        html(show_3dmol(pdb_text=pdb_text), height=500)
-        st.session_state["protein_info"] = protein_info
-        st.session_state["pdb_text"] = pdb_text
+
+def protein_upload_fn(file):
+    if file is None:
+        return "Please upload a PDB file.", pd.DataFrame(), "<p>No structure loaded.</p>"
+
+    save_path = f"data/proteins/{os.path.basename(file.name)}"
+    with open(file.name, "rb") as src:
+        with open(save_path, "wb") as dst:
+            dst.write(src.read())
+
+    app_state["protein_pdb"] = save_path
+    app_state["protein_name"] = os.path.basename(file.name)
+
+    with open(save_path, "r", encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+
+    app_state["pdb_text"] = text
+    info = parse_pdb_info(save_path)
+    app_state["protein_info"] = info
+    df = pd.DataFrame(info.items(), columns=["Property", "Value"])
+
+    return "Protein uploaded successfully.", df, f"<pre>{text[:3000]}</pre>"
+
 
 # -----------------------------
-# LIGAND PREPARATION
+# LIGAND FUNCTIONS
 # -----------------------------
-elif menu == "Ligand Preparation":
-    st.header("💊 Ligand Preparation")
-    smiles = st.text_input("Enter Ligand SMILES", placeholder="Example: CC(=O)OC1=CC=CC=C1C(=O)O")
-    ligand_name = st.text_input("Ligand Name (Optional)", placeholder="Example: Aspirin")
+def ligand_prepare_fn(smiles, ligand_name):
+    mol = smiles_to_mol(smiles)
+    if mol is None:
+        return "Invalid SMILES. Please enter a valid ligand structure.", pd.DataFrame()
 
-    if st.button("Prepare Ligand"):
-        mol = smiles_to_mol(smiles)
-        if mol:
-            st.session_state.ligand_mol = mol
-            st.session_state.ligand_smiles = smiles
-            st.session_state.ligand_name = ligand_name if ligand_name else "Ligand"
-            st.success("Ligand prepared successfully.")
-        else:
-            st.error("Invalid SMILES. Please enter a valid ligand structure.")
+    app_state["ligand_mol"] = mol
+    app_state["ligand_smiles"] = smiles
+    app_state["ligand_name"] = ligand_name if ligand_name else "Ligand"
 
-    if st.session_state.ligand_mol is not None:
-        mol = st.session_state.ligand_mol
-        props = ligand_properties(mol)
-        st.subheader("Ligand Properties")
-        st.dataframe(pd.DataFrame(props.items(), columns=["Property", "Value"]), use_container_width=True)
-        st.info("Ligand prepared successfully. 2D structure preview is disabled in this deployed version.")
-        st.session_state["ligand_info"] = props
+    props = ligand_properties(mol)
+    app_state["ligand_info"] = props
+    df = pd.DataFrame(props.items(), columns=["Property", "Value"])
+    return "Ligand prepared successfully.", df
+
 
 # -----------------------------
 # DOCKING SETUP
 # -----------------------------
-elif menu == "Docking Setup":
-    st.header("🎯 Docking Setup")
-    st.markdown("Define the docking search space (binding pocket / grid box).")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        center_x = st.number_input("center_x", value=10.0)
-        center_y = st.number_input("center_y", value=15.0)
-    with col2:
-        center_z = st.number_input("center_z", value=20.0)
-        size_x = st.number_input("size_x", value=20.0)
-    with col3:
-        size_y = st.number_input("size_y", value=20.0)
-        size_z = st.number_input("size_z", value=20.0)
-
-    exhaustiveness = st.slider("Exhaustiveness", 1, 20, 8)
-
-    st.session_state["dock_box"] = {
+def save_docking_box(center_x, center_y, center_z, size_x, size_y, size_z, exhaustiveness):
+    app_state["dock_box"] = {
         "center_x": center_x,
         "center_y": center_y,
         "center_z": center_z,
@@ -399,168 +259,225 @@ elif menu == "Docking Setup":
         "size_z": size_z,
         "exhaustiveness": exhaustiveness
     }
+    return "Docking box parameters saved.", str(app_state["dock_box"])
 
-    st.success("Docking box parameters saved.")
-    st.json(st.session_state["dock_box"])
 
 # -----------------------------
 # RUN DOCKING
 # -----------------------------
-elif menu == "Run Docking":
-    st.header("⚙️ Run Docking")
-    st.warning("Educational Mode: This version simulates docking results for teaching and learning.")
+def run_docking_fn():
+    if app_state["protein_pdb"] is None:
+        return "Please prepare a protein first.", pd.DataFrame(), pd.DataFrame(), ""
+    if app_state["ligand_mol"] is None:
+        return "Please prepare a ligand first.", pd.DataFrame(), pd.DataFrame(), ""
 
-    if st.session_state.protein_pdb is None:
-        st.error("Please prepare a protein first.")
-    elif st.session_state.ligand_mol is None:
-        st.error("Please prepare a ligand first.")
-    else:
-        if st.button("Run Demo Docking"):
-            result = simulate_docking(st.session_state.ligand_name, st.session_state.protein_name)
-            st.session_state.docking_result = result
-            st.success("Docking completed successfully.")
-            st.json({k: v for k, v in result.items() if k != "Interactions"})
+    result = simulate_docking(app_state["ligand_name"], app_state["protein_name"])
+    app_state["docking_result"] = result
+
+    summary_df = pd.DataFrame([
+        ["Protein", result["Protein"]],
+        ["Ligand", result["Ligand"]],
+        ["Binding Affinity (kcal/mol)", result["Binding Affinity (kcal/mol)"]],
+        ["Pose Rank", result["Pose Rank"]],
+        ["RMSD (Å)", result["RMSD (Å)"]]
+    ], columns=["Parameter", "Value"])
+
+    inter_df = pd.DataFrame(result["Interactions"], columns=["Interaction Type", "Residue", "Distance"])
+
+    return "Docking completed successfully.", summary_df, inter_df, result["Interpretation"]
+
 
 # -----------------------------
-# RESULTS
+# PDF DOWNLOAD
 # -----------------------------
-elif menu == "Results":
-    st.header("📊 Docking Results")
-    result = st.session_state.docking_result
-
+def generate_report_fn(student_name, reg_no):
+    result = app_state["docking_result"]
     if result is None:
-        st.info("No docking results available yet. Please run docking first.")
-    else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Binding Affinity", f"{result['Binding Affinity (kcal/mol)']} kcal/mol")
-        c2.metric("Pose Rank", result["Pose Rank"])
-        c3.metric("RMSD", f"{result['RMSD (Å)']} Å")
+        return None
 
-        st.subheader("Docking Summary")
-        summary_df = pd.DataFrame([
-            ["Protein", result["Protein"]],
-            ["Ligand", result["Ligand"]],
-            ["Binding Affinity (kcal/mol)", result["Binding Affinity (kcal/mol)"]],
-            ["Pose Rank", result["Pose Rank"]],
-            ["RMSD (Å)", result["RMSD (Å)"]]
-        ], columns=["Parameter", "Value"])
-        st.dataframe(summary_df, use_container_width=True)
+    pdf_path = generate_pdf_report(
+        student_name,
+        reg_no,
+        result,
+        app_state.get("protein_info", None),
+        app_state.get("ligand_info", None)
+    )
+    return pdf_path
 
-        st.subheader("Protein–Ligand Interactions")
-        inter_df = pd.DataFrame(result["Interactions"], columns=["Interaction Type", "Residue", "Distance"])
-        st.dataframe(inter_df, use_container_width=True)
-
-        st.subheader("Interpretation")
-        st.success(result["Interpretation"])
-
-        pdf_path = generate_pdf_report(
-            st.session_state.student_name,
-            st.session_state.reg_no,
-            result,
-            st.session_state.get("protein_info", None),
-            st.session_state.get("ligand_info", None)
-        )
-
-        with open(pdf_path, "rb") as f:
-            st.download_button(
-                "📥 Download Docking Report (PDF)",
-                f,
-                file_name="docking_report.pdf",
-                mime="application/pdf"
-            )
 
 # -----------------------------
-# QUIZ / VIVA
+# QUIZ
 # -----------------------------
-elif menu == "Quiz / Viva":
-    st.header("📝 Quiz / Viva")
+def evaluate_quiz(a1, a2, a3, a4):
+    answers = [
+        "Stronger predicted binding",
+        "To avoid unwanted interference in docking",
+        "Hydrogen bond",
+        "Binding region for ligand"
+    ]
+    user_answers = [a1, a2, a3, a4]
+    score = sum(1 for u, c in zip(user_answers, answers) if u == c)
+    return f"Your Score: {score} / 4"
 
-    questions = {
-        "1. What does a more negative docking score indicate?": [
-            "Weaker binding",
-            "Stronger predicted binding",
-            "Protein denaturation",
-            "Ligand instability"
-        ],
-        "2. Why are water molecules often removed during protein preparation?": [
-            "To reduce file size only",
-            "Because they are always harmful",
-            "To avoid unwanted interference in docking",
-            "To increase ligand size"
-        ],
-        "3. Which interaction is important for ligand binding?": [
-            "Hydrogen bond",
-            "Gamma decay",
-            "Radioactivity",
-            "Nuclear fission"
-        ],
-        "4. What is the role of the active site?": [
-            "Protein synthesis",
-            "Binding region for ligand",
-            "DNA replication",
-            "Membrane transport"
-        ]
-    }
-
-    answers = {
-        0: "Stronger predicted binding",
-        1: "To avoid unwanted interference in docking",
-        2: "Hydrogen bond",
-        3: "Binding region for ligand"
-    }
-
-    score = 0
-    user_answers = []
-    for i, (q, opts) in enumerate(questions.items()):
-        ans = st.radio(q, opts, key=f"q_{i}")
-        user_answers.append(ans)
-
-    if st.button("Submit Quiz"):
-        for i, ans in enumerate(user_answers):
-            if ans == answers[i]:
-                score += 1
-        st.success(f"Your Score: {score} / {len(questions)}")
 
 # -----------------------------
 # FEEDBACK
 # -----------------------------
-elif menu == "Feedback":
-    st.header("⭐ Feedback")
-    st.write("Your feedback helps improve this virtual lab.")
+def submit_feedback(name, reg_no, rating, feedback_text):
+    save_feedback(name, reg_no, rating, feedback_text)
 
-    name = st.text_input("Name (Optional)")
-    reg_no = st.text_input("Registration Number (Optional)")
-    rating = st.slider("Rate this virtual lab", 1, 5, 4)
-    feedback_text = st.text_area("Write your feedback")
+    df = pd.read_csv(FEEDBACK_FILE)
+    avg_rating = round(df["rating"].mean(), 2) if not df.empty else 0
+    total = len(df)
 
-    if st.button("Submit Feedback"):
-        save_feedback(name, reg_no, rating, feedback_text)
-        st.success("Thank you for your feedback!")
+    return "Thank you for your feedback!", avg_rating, total
 
-    if os.path.exists(FEEDBACK_FILE):
-        df = pd.read_csv(FEEDBACK_FILE)
-        if not df.empty:
-            st.subheader("Overall Feedback Summary")
-            st.metric("Average Rating", round(df["rating"].mean(), 2))
-            st.metric("Total Feedback Entries", len(df))
 
 # -----------------------------
-# FOOTER
+# UI
 # -----------------------------
-st.markdown("---")
-st.caption("Developed using Streamlit for educational demonstration of protein–ligand docking workflow.")
+with gr.Blocks(title="Protein–Ligand Docking Virtual Lab") as demo:
+    gr.Markdown("# 🧬 Protein–Ligand Docking Virtual Lab")
+    gr.Markdown("An interactive educational platform to understand protein–ligand binding and molecular docking.")
 
-# requirements.txt
-# streamlit
-# pandas
-# requests
-# rdkit
-# biopython
-# py3Dmol
-# reportlab
+    with gr.Tab("Home"):
+        gr.Markdown("""
+        ## Objective
+        This virtual lab helps students learn the **workflow of molecular docking**:
+        - Protein selection and preparation
+        - Ligand input and molecular property analysis
+        - Docking box setup
+        - Docking score interpretation
+        - Protein–ligand interaction analysis
+        - Report generation and self-evaluation
+        """)
+        gr.Markdown("**Note:** This app is designed for teaching and learning purposes. The docking step uses an educational simulation.")
 
-# README.md (quick setup)
-# 1. pip install -r requirements.txt
-# 2. streamlit run app.py
-# 3. Upload to GitHub
-# 4. Deploy on Streamlit Cloud
+    with gr.Tab("Theory"):
+        gr.Markdown("""
+        ## 📘 Theory of Molecular Docking
+
+        **Molecular docking** is a computational technique used to predict how a **ligand** binds to a **protein receptor**.
+
+        ### Important Concepts
+        - **Protein**: Biological target such as enzyme or receptor
+        - **Ligand**: Small molecule/drug/phytochemical that binds to the protein
+        - **Active Site**: Binding pocket where ligand interacts with the protein
+        - **Docking Score**: Predicted binding energy (more negative = better affinity)
+        - **Hydrogen Bond / Hydrophobic Interaction**: Important interactions stabilizing the complex
+        - **RMSD**: Measure of structural similarity between poses
+        """)
+
+    with gr.Tab("Protein Preparation"):
+        gr.Markdown("## 🧫 Protein Preparation")
+        with gr.Row():
+            pdb_id = gr.Textbox(label="Enter PDB ID", placeholder="Example: 6LU7")
+            fetch_btn = gr.Button("Fetch Protein")
+
+        protein_file = gr.File(label="Or Upload PDB File", file_types=[".pdb"])
+        upload_btn = gr.Button("Upload Protein")
+
+        protein_status = gr.Textbox(label="Status")
+        protein_df = gr.Dataframe(label="Protein Summary")
+        protein_view = gr.HTML(label="Protein Structure Preview")
+
+        fetch_btn.click(protein_fetch_fn, inputs=pdb_id, outputs=[protein_status, protein_df, protein_view])
+        upload_btn.click(protein_upload_fn, inputs=protein_file, outputs=[protein_status, protein_df, protein_view])
+
+    with gr.Tab("Ligand Preparation"):
+        gr.Markdown("## 💊 Ligand Preparation")
+        smiles = gr.Textbox(label="Enter Ligand SMILES", placeholder="Example: CC(=O)OC1=CC=CC=C1C(=O)O")
+        ligand_name = gr.Textbox(label="Ligand Name (Optional)", placeholder="Example: Aspirin")
+        ligand_btn = gr.Button("Prepare Ligand")
+
+        ligand_status = gr.Textbox(label="Status")
+        ligand_df = gr.Dataframe(label="Ligand Properties")
+
+        ligand_btn.click(ligand_prepare_fn, inputs=[smiles, ligand_name], outputs=[ligand_status, ligand_df])
+
+    with gr.Tab("Docking Setup"):
+        gr.Markdown("## 🎯 Docking Setup")
+        with gr.Row():
+            center_x = gr.Number(label="center_x", value=10.0)
+            center_y = gr.Number(label="center_y", value=15.0)
+            center_z = gr.Number(label="center_z", value=20.0)
+
+        with gr.Row():
+            size_x = gr.Number(label="size_x", value=20.0)
+            size_y = gr.Number(label="size_y", value=20.0)
+            size_z = gr.Number(label="size_z", value=20.0)
+
+        exhaustiveness = gr.Slider(1, 20, value=8, step=1, label="Exhaustiveness")
+        dock_btn = gr.Button("Save Docking Box")
+
+        dock_status = gr.Textbox(label="Status")
+        dock_json = gr.Textbox(label="Saved Parameters")
+
+        dock_btn.click(
+            save_docking_box,
+            inputs=[center_x, center_y, center_z, size_x, size_y, size_z, exhaustiveness],
+            outputs=[dock_status, dock_json]
+        )
+
+    with gr.Tab("Run Docking"):
+        gr.Markdown("## ⚙️ Run Docking")
+        gr.Markdown("**Educational Mode:** This version simulates docking results for teaching and learning.")
+        run_btn = gr.Button("Run Demo Docking")
+
+        run_status = gr.Textbox(label="Status")
+        result_summary = gr.Dataframe(label="Docking Summary")
+        result_interactions = gr.Dataframe(label="Protein–Ligand Interactions")
+        result_interpretation = gr.Textbox(label="Interpretation")
+
+        run_btn.click(run_docking_fn, outputs=[run_status, result_summary, result_interactions, result_interpretation])
+
+    with gr.Tab("Results / Report"):
+        gr.Markdown("## 📊 Generate Report")
+        student_name = gr.Textbox(label="Student Name (Optional)")
+        reg_no = gr.Textbox(label="Registration Number (Optional)")
+        report_btn = gr.Button("Generate PDF Report")
+        report_file = gr.File(label="Download Report")
+
+        report_btn.click(generate_report_fn, inputs=[student_name, reg_no], outputs=report_file)
+
+    with gr.Tab("Quiz / Viva"):
+        gr.Markdown("## 📝 Quiz / Viva")
+        q1 = gr.Radio(
+            ["Weaker binding", "Stronger predicted binding", "Protein denaturation", "Ligand instability"],
+            label="1. What does a more negative docking score indicate?"
+        )
+        q2 = gr.Radio(
+            ["To reduce file size only", "Because they are always harmful", "To avoid unwanted interference in docking", "To increase ligand size"],
+            label="2. Why are water molecules often removed during protein preparation?"
+        )
+        q3 = gr.Radio(
+            ["Hydrogen bond", "Gamma decay", "Radioactivity", "Nuclear fission"],
+            label="3. Which interaction is important for ligand binding?"
+        )
+        q4 = gr.Radio(
+            ["Protein synthesis", "Binding region for ligand", "DNA replication", "Membrane transport"],
+            label="4. What is the role of the active site?"
+        )
+        quiz_btn = gr.Button("Submit Quiz")
+        quiz_result = gr.Textbox(label="Quiz Result")
+
+        quiz_btn.click(evaluate_quiz, inputs=[q1, q2, q3, q4], outputs=quiz_result)
+
+    with gr.Tab("Feedback"):
+        gr.Markdown("## ⭐ Feedback")
+        fb_name = gr.Textbox(label="Name (Optional)")
+        fb_reg = gr.Textbox(label="Registration Number (Optional)")
+        fb_rating = gr.Slider(1, 5, value=4, step=1, label="Rate this virtual lab")
+        fb_text = gr.Textbox(label="Write your feedback", lines=4)
+        fb_btn = gr.Button("Submit Feedback")
+
+        fb_status = gr.Textbox(label="Status")
+        avg_rating = gr.Number(label="Average Rating")
+        total_feedback = gr.Number(label="Total Feedback Entries")
+
+        fb_btn.click(submit_feedback, inputs=[fb_name, fb_reg, fb_rating, fb_text], outputs=[fb_status, avg_rating, total_feedback])
+
+    gr.Markdown("---")
+    gr.Markdown("Developed using **Gradio** for educational demonstration of protein–ligand docking workflow.")
+
+demo.launch()
