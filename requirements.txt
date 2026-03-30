@@ -1,4 +1,4 @@
-gradio==4.44.1
+gradio==6.10.0
 pandas==2.2.2
 requests==2.31.0
 rdkit-pypi==2022.9.5
